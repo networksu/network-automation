@@ -1,84 +1,30 @@
-#!/bin/bash
-# This script should be run with sudo to push configs to GitHub
-# Save this as /var/lib/awx/projects/push_configs.sh and make it executable (chmod +x)
+---
+# Playbook: switch_backup_with_post.yml 
+# This playbook backs up switches and then runs a post-job command to push to GitHub
 
-# Configuration
-BACKUP_PATH="/var/lib/awx/projects/su_network_backup/kantra/building_A/stack"
-GIT_USER="salwan.mohamed"
-GIT_EMAIL="salwan.mohamed@su.edu.eg"
-GIT_PASSWORD="S@1wan9282"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+- name: Backup Network Switch Configurations
+  hosts: switch_stack_B_A
+  gather_facts: false
+  vars:
+    backup_path: "/var/lib/awx/projects/su_network_backup/kantra/building_A/stack"
 
-# Ensure backup directory exists with proper permissions
-mkdir -p $BACKUP_PATH
-cd $BACKUP_PATH || exit 1
+  tasks:
+    - name: Create backup directory if it doesn't exist
+      file:
+        path: "{{ backup_path }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+      become: yes
 
-echo "Current directory: $(pwd)"
-echo "Directory contents before Git operations:"
-ls -la
+    - name: Backup Cisco IOS switch configurations
+      ios_config:
+        backup: yes
+        backup_options:
+          filename: "{{ inventory_hostname }}.cfg"
+          dir_path: "{{ backup_path }}"
+      register: backup_results
 
-# Check if it's already a Git repository
-if [ ! -d ".git" ]; then
-    echo "Initializing new Git repository..."
-    git init
-    
-    # Create README file if it doesn't exist
-    if [ ! -f "README.md" ]; then
-        echo "# Switch Configuration Backups for Building A - Stack" > README.md
-    fi
-    
-    # Configure Git
-    git config user.name "$GIT_USER"
-    git config user.email "$GIT_EMAIL"
-else
-    echo "Existing Git repository found."
-    # Make sure Git user is configured
-    git config user.name "$GIT_USER"
-    git config user.email "$GIT_EMAIL"
-fi
-
-# Configure the remote - using https protocol with token auth
-echo "Setting up remote repository..."
-# Use personal access token format for authentication
-git remote remove origin 2>/dev/null || true
-git remote add origin "https://$GIT_USER:$GIT_PASSWORD@github.com/networksu/su_network_backup.git"
-
-# Test connection to GitHub
-echo "Testing GitHub connection..."
-git ls-remote --exit-code origin >/dev/null 2>&1
-if [ $? -ne 0 ]; then
-    echo "ERROR: Cannot connect to GitHub. Check credentials and network."
-    echo "Trying alternative URL format..."
-    # Try alternative URL format
-    git remote remove origin
-    git remote add origin "https://github.com/networksu/su_network_backup.git"
-    echo "Setting up credentials for HTTPS..."
-    git config --local credential.helper store
-    echo "https://$GIT_USER:$GIT_PASSWORD@github.com" > ~/.git-credentials
-    chmod 600 ~/.git-credentials
-fi
-
-# Stage all files
-echo "Adding files to Git..."
-git add -A
-
-# Get status
-echo "Git status:"
-git status
-
-# Commit changes
-echo "Committing changes..."
-git commit -m "Automated backup of switch configurations - $TIMESTAMP" || echo "No changes to commit or commit failed"
-
-# IMPORTANT: Get current branch name instead of assuming
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-echo "Current branch is: $CURRENT_BRANCH"
-
-# Push to GitHub using the actual branch name
-echo "Pushing to GitHub using branch $CURRENT_BRANCH..."
-git push -u origin $CURRENT_BRANCH --force
-
-echo "Git operations completed. Final directory contents:"
-ls -la
-
-echo "Script completed at $(date)"
+# No Git operations in the main playbook
+# Instead, create a post-job command in AWX job template
