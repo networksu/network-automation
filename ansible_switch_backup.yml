@@ -1,13 +1,11 @@
 ---
-# Playbook: switch_backup.yml
-# Description: Backs up switch configurations and pushes them to GitHub
-
 - name: Backup Network Switch Configurations
   hosts: switch_stack_B_A
   gather_facts: false
   vars:
     temp_backup_path: "/tmp/switch_backups"
     host_backup_path: "/var/lib/awx/projects/switch_backups"
+    github_repo: "https://github.com/networksu/su_network_backup.git"
 
   tasks:
     - name: Ensure temporary backup directory exists
@@ -39,7 +37,7 @@
     - name: Copy backup files to persistent storage
       copy:
         src: "{{ temp_backup_path }}/{{ inventory_hostname }}.cfg"
-        dest: "{{ host_backup_path }}/{{ inventory_hostname }}.cfg"
+        dest: "{{ host_backup_path }}/kantra/building_A/stack/{{ inventory_hostname }}.cfg"
         mode: '0644'
         remote_src: yes
       delegate_to: localhost
@@ -48,15 +46,15 @@
 
     - name: Verify backup files exist in persistent storage
       stat:
-        path: "{{ host_backup_path }}/{{ inventory_hostname }}.cfg"
+        path: "{{ host_backup_path }}/kantra/building_A/stack/{{ inventory_hostname }}.cfg"
       delegate_to: localhost
-      register: backup_file_status
+      register: file_status
       become: yes
 
     - name: Fail if no backup files were found
       fail:
-        msg: "No backup files found in {{ host_backup_path }}"
-      when: not backup_file_status.stat.exists
+        msg: "Backup file missing: {{ inventory_hostname }}.cfg"
+      when: not file_status.stat.exists
 
     - name: Create GitHub push script
       copy:
@@ -64,42 +62,31 @@
         mode: '0755'
         content: |
           #!/bin/bash
-          BACKUP_PATH="/var/lib/awx/projects/switch_backups"
+          set -e
+          BACKUP_PATH="/var/lib/awx/projects/switch_backups/kantra/building_A/stack"
           GIT_USER="salwan.mohamed"
           GIT_EMAIL="salwan.mohamed@su.edu.eg"
-          GIT_REPO="networksu/su_network_backup"
-          GIT_BRANCH="main"
+          GIT_TOKEN="YOUR_GITHUB_TOKEN"
+          GIT_REPO="https://github.com/networksu/su_network_backup.git"
           LOG_FILE="/var/lib/awx/projects/github_push.log"
 
           echo "==== Starting GitHub push script ====" > $LOG_FILE
-          echo "Current directory: $(pwd)" >> $LOG_FILE
+          
+          cd $BACKUP_PATH || { echo "Directory does not exist"; exit 1; }
 
-          cd $BACKUP_PATH || exit 1
+          [ -d ".git" ] || git init
 
-          if [ ! -d ".git" ]; then
-            echo "Initializing new Git repository..." >> $LOG_FILE
-            git init
-            git config user.name "$GIT_USER"
-            git config user.email "$GIT_EMAIL"
-            git remote add origin "https://$GIT_USER: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@github.com/$GIT_REPO.git"
-          fi
-
-          echo "Adding all backup files to Git..." >> $LOG_FILE
+          git config user.name "$GIT_USER"
+          git config user.email "$GIT_EMAIL"
+          git remote add origin $GIT_REPO || true
+          
           git add -A
+          git commit -m "Automated switch backup - $(date +%Y%m%d_%H%M%S)"
+          git pull --rebase origin main || true
+          git push -f origin main
+          
+          echo "==== GitHub push completed ===="
 
-          echo "Committing changes..." >> $LOG_FILE
-          git commit -m "Updated switch backup configurations $(date)" || echo "No changes to commit" >> $LOG_FILE
-
-          echo "Fetching latest from GitHub..." >> $LOG_FILE
-          git fetch origin $GIT_BRANCH
-
-          echo "Merging remote changes..." >> $LOG_FILE
-          git pull origin $GIT_BRANCH --no-edit
-
-          echo "Pushing changes to GitHub..." >> $LOG_FILE
-          git push -u origin $GIT_BRANCH --force || echo "Push failed!" >> $LOG_FILE
-
-          echo "==== GitHub push completed ====" >> $LOG_FILE
       delegate_to: localhost
       run_once: true
       become: yes
@@ -110,15 +97,14 @@
       run_once: true
       become: yes
 
-    - name: Show push script log if exists
+    - name: Display GitHub push log
       shell: "cat /var/lib/awx/projects/github_push.log || echo 'Log file not found'"
       delegate_to: localhost
-      run_once: true
       register: git_log
       become: yes
       ignore_errors: yes
 
-    - name: Display GitHub push log
+    - name: Show push log output
       debug:
         var: git_log.stdout_lines
       run_once: true
