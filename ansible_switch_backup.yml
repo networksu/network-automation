@@ -1,6 +1,7 @@
 ---
-# Playbook: switch_backup_with_post.yml 
-# This playbook backs up switches and then runs a post-job command to push to GitHub
+# Playbook: switch_backup.yml 
+# Description: Backs up switch configurations and commits to GitHub
+# For use with existing inventory "Cisco_ios_invetory" and group "switch_stack_B_A"
 
 - name: Backup Network Switch Configurations
   hosts: switch_stack_B_A
@@ -26,5 +27,13 @@
           dir_path: "{{ backup_path }}"
       register: backup_results
 
-# No Git operations in the main playbook
-# Instead, create a post-job command in AWX job template
+    - name: Show backup results
+      debug:
+        var: backup_results
+      when: backup_results is defined
+
+    - name: Run GitHub push script
+      shell: /var/lib/awx/projects/push_configs.sh
+      delegate_to: localhost
+      run_once: true
+      become: yes
