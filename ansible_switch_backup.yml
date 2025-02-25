@@ -1,19 +1,12 @@
 ---
 # Playbook: switch_backup.yml
-# Description: Backup network switch configurations and commit changes to Git repository
-# For use with existing inventory "Cisco_ios_invetory" and group "switch_stack_B_A"
+# Description: Backup network switch configurations - uses external script for Git operations
 
 - name: Backup Network Switch Configurations
   hosts: switch_stack_B_A
   gather_facts: false
   vars:
-    # Updated backup path to match the repository structure
     backup_path: "/var/lib/awx/projects/su_network_backup/kantra/building_A/stack"
-    git_repo: "github.com/networksu/su_network_backup"
-    git_branch: "main"
-    git_user: "salwan.mohamed@su.edu.eg"
-    git_email: "salwan.mohamed@su.edu.eg"
-    git_password: "S@1wan9282"
 
   tasks:
     - name: Create backup directory if it doesn't exist
@@ -21,12 +14,6 @@
         path: "{{ backup_path }}"
         state: directory
         mode: '0755'
-      delegate_to: localhost
-      run_once: true
-
-    - name: Get current date and time
-      set_fact:
-        timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
       delegate_to: localhost
       run_once: true
 
@@ -38,119 +25,7 @@
           dir_path: "{{ backup_path }}"
       register: backup_results
 
-    # Debug information for troubleshooting
-    - name: List backup directory contents
-      shell: "ls -la {{ backup_path }}"
-      register: dir_contents
-      delegate_to: localhost
-      run_once: true
-      
-    - name: Show directory contents
-      debug:
-        var: dir_contents.stdout_lines
-      delegate_to: localhost
-      run_once: true
-
-    # Use Git module instead of shell commands where possible
-    - name: Initialize Git repository if needed
-      git:
-        repo: "https://{{ git_user }}:{{ git_password | urlencode }}@{{ git_repo }}"
-        dest: "{{ backup_path }}"
-        clone: yes
-        update: no
-        force: no
-      delegate_to: localhost
-      run_once: true
-      ignore_errors: yes
-      no_log: true
-      register: git_clone
-
-    - name: Initialize local repository if clone failed
-      block:
-        - name: Check if directory is a Git repository
-          stat:
-            path: "{{ backup_path }}/.git"
-          register: git_dir
-          delegate_to: localhost
-          run_once: true
-          
-        - name: Initialize local Git repository
-          shell: |
-            cd {{ backup_path }}
-            git init
-            git config user.name "{{ git_user }}"
-            git config user.email "{{ git_email }}"
-            git remote add origin https://{{ git_user }}:{{ git_password | urlencode }}@{{ git_repo }}
-            # Create README if needed
-            if [ ! -f README.md ]; then
-              echo "# Switch Configuration Backups for Building A - Stack" > README.md
-            fi
-          delegate_to: localhost
-          run_once: true
-          when: not git_dir.stat.exists
-          no_log: true
-      when: git_clone is failed
-
-    - name: Configure Git user information
-      shell: |
-        cd {{ backup_path }}
-        git config user.name "{{ git_user }}"
-        git config user.email "{{ git_email }}"
-      delegate_to: localhost
-      run_once: true
-
-    - name: Add all files to Git
-      shell: |
-        cd {{ backup_path }}
-        git add -A
-      delegate_to: localhost
-      run_once: true
-      register: git_add
-
-    - name: Show Git status
-      shell: |
-        cd {{ backup_path }}
-        git status
-      delegate_to: localhost
-      run_once: true
-      register: git_status
-      
-    - name: Display Git status
-      debug:
-        var: git_status.stdout_lines
-      delegate_to: localhost
-      run_once: true
-
-    - name: Commit changes to Git with timestamp
-      shell: |
-        cd {{ backup_path }}
-        git commit -m "Automated backup of switch configurations - {{ timestamp }}"
-      delegate_to: localhost
-      run_once: true
-      register: git_commit
-      failed_when: git_commit.rc != 0 and "nothing to commit" not in git_commit.stderr
-      ignore_errors: yes
-
-    - name: Display Git commit result
-      debug:
-        var: git_commit.stdout_lines
-      delegate_to: localhost
-      run_once: true
-      when: git_commit.stdout_lines is defined
-
-    - name: Push changes to Git repository
-      shell: |
-        cd {{ backup_path }}
-        git remote set-url origin https://{{ git_user }}:{{ git_password | urlencode }}@{{ git_repo }}
-        # Force push to main branch
-        git push -u origin {{ git_branch }} --force
-      delegate_to: localhost
-      run_once: true
-      register: git_push
-      no_log: true
-      
-    - name: Show Git push status (without revealing credentials)
-      debug:
-        msg: "Git push completed with return code: {{ git_push.rc }}"
+    - name: Run external Git push script
+      shell: /var/lib/awx/projects/push_configs.sh
       delegate_to: localhost
       run_once: true
