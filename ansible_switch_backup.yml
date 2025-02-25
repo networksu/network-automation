@@ -1,19 +1,18 @@
 ---
 # Playbook: switch_backup.yml
-# Description: Backs up switch configurations and saves to host path
-# For use with existing inventory "Cisco_ios_invetory" and group "switch_stack_B_A"
+# Description: Backs up switch configurations and saves them to a persistent directory
+# Runs on Ansible AWX (installed on Minikube)
 
 - name: Backup Network Switch Configurations
   hosts: switch_stack_B_A
   gather_facts: false
   vars:
-    # Temporary backup path inside container
+    # Paths
     temp_backup_path: "/tmp/switch_backups"
-    # Final destination path (container-accessible)
     host_backup_path: "/var/lib/awx/projects/switch_backups"
 
   tasks:
-    - name: Create temporary backup directory if it doesn't exist
+    - name: Ensure temporary backup directory exists
       file:
         path: "{{ temp_backup_path }}"
         state: directory
@@ -22,11 +21,11 @@
       run_once: true
       become: yes
 
-    - name: Create host backup directory if it doesn't exist
+    - name: Ensure persistent host backup directory exists
       file:
         path: "{{ host_backup_path }}"
         state: directory
-        mode: '0777'  # World-writable to avoid permission issues
+        mode: '0777'  # Avoid permission issues
       delegate_to: localhost
       run_once: true
       become: yes
@@ -44,8 +43,8 @@
         msg: "Backup saved to: {{ backup_results.backup_path }}"
       when: backup_results is defined
 
-    # Copy the backup files from the temporary location to the host location
-    - name: Copy backup files to host directory
+    # Copy the backup files to the persistent host directory
+    - name: Copy backup files to persistent storage
       copy:
         src: "{{ temp_backup_path }}/{{ inventory_hostname }}.cfg"
         dest: "{{ host_backup_path }}/{{ inventory_hostname }}.cfg"
@@ -55,73 +54,69 @@
       become: yes
       when: backup_results is defined and backup_results.backup_path is defined
 
-    - name: List files in host backup directory
-      shell: "ls -la {{ host_backup_path }}"
+    - name: Verify backup files exist in persistent storage
+      find:
+        paths: "{{ host_backup_path }}"
+        patterns: "*.cfg"
       delegate_to: localhost
-      run_once: true
-      register: host_dir_contents
-      become: yes
+      register: existing_backups
 
-    - name: Show host directory contents
+    - name: Show existing backup files
       debug:
-        var: host_dir_contents.stdout_lines
+        msg: "Existing backup files: {{ existing_backups.files | map(attribute='path') | list }}"
       run_once: true
 
-    - name: Create GitHub push script with enhanced logging
+    - name: Fail if no backup files were found
+      fail:
+        msg: "No backup files found in {{ host_backup_path }}. The script will not run!"
+      when: existing_backups.matched == 0
+
+    # GitHub Push Script
+    - name: Ensure GitHub push script is in place
       copy:
         dest: "/var/lib/awx/projects/push_configs.sh"
         mode: '0755'
         content: |
           #!/bin/bash
-          # GitHub push script with enhanced error logging
-          
-          # Configuration
+          # GitHub push script with error handling
+
           BACKUP_PATH="/var/lib/awx/projects/switch_backups"
           GIT_USER="salwan.mohamed"
           GIT_EMAIL="salwan.mohamed@su.edu.eg"
-          GIT_TOKEN="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"
-          
-          # Fixed log file location that won't get truncated in output
+          GIT_TOKEN="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"
+
           LOG_FILE="/var/lib/awx/projects/github_push.log"
-          
-          # Start logging
+
           echo "==== Starting GitHub push script at $(date) ====" > $LOG_FILE
-          
-          # Function to log messages
-          log() {
-            echo "$1" | tee -a $LOG_FILE
-          }
-          
-          # Function to log error and exit
+
+          log() { echo "$1" | tee -a $LOG_FILE; }
+
           error_exit() {
             log "ERROR: $1"
-            log "Script failed at $(date)"
             exit 1
           }
-          
-          log "Using backup path: $BACKUP_PATH"
-          
-          # Check directory exists
-          [ -d "$BACKUP_PATH" ] || error_exit "Backup directory doesn't exist"
-          cd $BACKUP_PATH || error_exit "Failed to change to directory $BACKUP_PATH"
-          
-          log "Current directory: $(pwd)"
-          log "Directory contents:"
+
+          log "Checking backup directory: $BACKUP_PATH"
+          [ -d "$BACKUP_PATH" ] || error_exit "Backup directory does not exist"
+
+          cd "$BACKUP_PATH" || error_exit "Failed to access backup directory"
+
+          log "Verifying backup files..."
           ls -la | tee -a $LOG_FILE
-          
-          # Git operations with error checking
+
+          # Git operations
           [ -d ".git" ] && { log "Removing existing Git repo"; rm -rf .git; }
           
           log "Initializing Git repository..."
           git init >> $LOG_FILE 2>&1 || error_exit "Failed to initialize Git"
-          
+
           log "Configuring Git..."
-          git config user.name "$GIT_USER" >> $LOG_FILE 2>&1 || error_exit "Failed to set Git user"
-          git config user.email "$GIT_EMAIL" >> $LOG_FILE 2>&1 || error_exit "Failed to set Git email"
-          
-          log "Setting up remote..."
-          git remote add origin "https://$GIT_USER:$GIT_TOKEN@github.com/networksu/su_network_backup.git" >> $LOG_FILE 2>&1 || error_exit "Failed to add remote"
-          
+          git config user.name "$GIT_USER"
+          git config user.email "$GIT_EMAIL"
+
+          log "Setting up Git remote..."
+          git remote add origin "https://$GIT_USER:$GIT_TOKEN@github.com/networksu/su_network_backup.git"
+
           # Create README
           log "Creating README file..."
           echo "# Switch Configuration Backups" > README.md
@@ -134,17 +129,16 @@
             basename=$(basename "$cfg" .cfg)
             echo "- $basename" >> README.md
           done
-          
+
           log "Adding files to Git..."
-          git add -A >> $LOG_FILE 2>&1 || error_exit "Failed to add files to Git"
-          
+          git add -A || error_exit "Failed to add files to Git"
+
           log "Committing changes..."
-          git commit -m "Switch configurations - $(date +%Y%m%d_%H%M%S)" >> $LOG_FILE 2>&1
-          # Ignore commit errors due to "nothing to commit"
-          
+          git commit -m "Switch configurations - $(date +%Y%m%d_%H%M%S)" || log "Nothing to commit"
+
           log "Pushing to GitHub..."
-          git push -f origin master >> $LOG_FILE 2>&1 || error_exit "Failed to push to GitHub"
-          
+          git push -f origin main || error_exit "Failed to push to GitHub"
+
           log "Successfully completed at $(date)"
           exit 0
       delegate_to: localhost
