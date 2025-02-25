@@ -1,18 +1,30 @@
 ---
 # Playbook: switch_backup.yml
-# Description: Backs up switch configurations and commits to GitHub
+# Description: Backs up switch configurations and saves to host user profile
 # For use with existing inventory "Cisco_ios_invetory" and group "switch_stack_B_A"
 
 - name: Backup Network Switch Configurations
   hosts: switch_stack_B_A
   gather_facts: false
   vars:
-    backup_path: "/var/lib/awx/projects/switch_backups"
+    # Temporary backup path inside container
+    temp_backup_path: "/tmp/switch_backups"
+    # Final destination on host system
+    host_backup_path: "/home/salwan/switch_backups"
 
   tasks:
-    - name: Create backup directory if it doesn't exist
+    - name: Create temporary backup directory if it doesn't exist
       file:
-        path: "{{ backup_path }}"
+        path: "{{ temp_backup_path }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+      become: yes
+
+    - name: Create host backup directory if it doesn't exist
+      file:
+        path: "{{ host_backup_path }}"
         state: directory
         mode: '0755'
       delegate_to: localhost
@@ -24,7 +36,7 @@
         backup: yes
         backup_options:
           filename: "{{ inventory_hostname }}.cfg"
-          dir_path: "{{ backup_path }}"
+          dir_path: "{{ temp_backup_path }}"
       register: backup_results
 
     - name: Display backup path
@@ -32,8 +44,8 @@
         msg: "Backup saved to: {{ backup_results.backup_path }}"
       when: backup_results is defined
 
-    - name: List files in backup directory
-      shell: "ls -la {{ backup_path }}"
+    - name: List files in temp backup directory
+      shell: "ls -la {{ temp_backup_path }}"
       delegate_to: localhost
       run_once: true
       register: dir_contents
@@ -44,8 +56,42 @@
         var: dir_contents.stdout_lines
       run_once: true
 
-    - name: Run GitHub push script
-      shell: /var/lib/awx/projects/push_configs.sh
+    # Copy the backup files from the temporary location to the host location
+    - name: Copy backup files to host user directory
+      copy:
+        src: "{{ temp_backup_path }}/{{ inventory_hostname }}.cfg"
+        dest: "{{ host_backup_path }}/{{ inventory_hostname }}.cfg"
+        mode: '0644'
+        remote_src: yes
+      delegate_to: localhost
+      become: yes
+      when: backup_results is defined and backup_results.backup_path is defined
+
+    - name: Set proper ownership of backup files
+      file:
+        path: "{{ host_backup_path }}"
+        owner: salwan
+        group: salwan
+        recurse: yes
       delegate_to: localhost
       run_once: true
       become: yes
+
+    - name: List files in host backup directory
+      shell: "ls -la {{ host_backup_path }}"
+      delegate_to: localhost
+      run_once: true
+      register: host_dir_contents
+      become: yes
+
+    - name: Show host directory contents
+      debug:
+        var: host_dir_contents.stdout_lines
+      run_once: true
+
+    - name: Run GitHub push script
+      shell: /home/salwan/push_configs.sh
+      delegate_to: localhost
+      run_once: true
+      become: yes
+      become_user: salwan
