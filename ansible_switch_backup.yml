@@ -7,7 +7,7 @@
   hosts: switch_stack_B_A
   gather_facts: false
   vars:
-    backup_path: "/var/lib/awx/projects/su_network_backup/kantra/building_A/stack"
+    backup_path: "/var/lib/awx/projects/switch_backups"
 
   tasks:
     - name: Create backup directory if it doesn't exist
