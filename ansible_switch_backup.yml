@@ -8,7 +8,7 @@
   gather_facts: false
   vars:
     backup_path: "/var/lib/awx/projects/switch_backups"
-
+  
   tasks:
     - name: Create backup directory if it doesn't exist
       file:
@@ -18,20 +18,20 @@
       delegate_to: localhost
       run_once: true
       become: yes
-
+    
     - name: Backup Cisco IOS switch configurations
-  ios_config:
-    backup: yes
-    backup_options:
-      filename: "{{ inventory_hostname }}.cfg"
-      dir_path: "/var/lib/awx/projects/su_network_backup/kantra/building_A/stack"
-  register: backup_results
-
-- name: Display backup path
-  debug:
-    msg: "Backup saved to: {{ backup_results.backup_path }}"
-  when: backup_results is defined
-
+      ios_config:
+        backup: yes
+        backup_options:
+          filename: "{{ inventory_hostname }}.cfg"
+          dir_path: "{{ backup_path }}"
+      register: backup_results
+    
+    - name: Display backup path
+      debug:
+        msg: "Backup saved to: {{ backup_results.backup_path }}"
+      when: backup_results is defined
+    
     - name: Run GitHub push script
       shell: /var/lib/awx/projects/push_configs.sh
       delegate_to: localhost
