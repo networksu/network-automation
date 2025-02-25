@@ -1,6 +1,6 @@
 ---
 # Playbook: switch_backup.yml
-# Description: Backs up switch configurations and saves to host path
+# Description: Automates switch configuration backups, moves files to a persistent location, and pushes to GitHub.
 
 - name: Backup Network Switch Configurations
   hosts: switch_stack_B_A
@@ -15,15 +15,13 @@
         path: "{{ temp_backup_path }}"
         state: directory
         mode: '0755'
-      delegate_to: localhost
-      run_once: true
       become: yes
 
     - name: Ensure persistent host backup directory exists
       file:
         path: "{{ host_backup_path }}"
         state: directory
-        mode: '0777'
+        mode: '0777'  # Full access to avoid permission issues
       delegate_to: localhost
       run_once: true
       become: yes
@@ -41,30 +39,67 @@
         msg: "Backup saved to: {{ backup_results.backup_path }}"
       when: backup_results is defined
 
-    - name: Ensure backup files are copied to persistent directory
-      copy:
-        src: "{{ temp_backup_path }}/{{ inventory_hostname }}.cfg"
-        dest: "{{ host_backup_path }}/{{ inventory_hostname }}.cfg"
-        mode: '0644'
-        remote_src: yes
+    - name: Copy backup files to persistent storage
+      shell: |
+        cp -r {{ temp_backup_path }}/* {{ host_backup_path }}/
+        chmod -R 777 {{ host_backup_path }}
       delegate_to: localhost
       become: yes
-      when: backup_results is defined and backup_results.backup_path is defined
 
-    - name: List files in host backup directory
+    - name: Verify copied files in persistent directory
       shell: "ls -la {{ host_backup_path }}"
       delegate_to: localhost
-      run_once: true
-      register: host_dir_contents
+      register: dir_contents
       become: yes
 
-    - name: Show host directory contents
+    - name: Display host backup directory contents
       debug:
-        var: host_dir_contents.stdout_lines
-      run_once: true
+        var: dir_contents.stdout_lines
+
+    # Git operations
+    - name: Ensure GitHub push script exists
+      copy:
+        dest: "/var/lib/awx/projects/push_configs.sh"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # GitHub push script
+
+          BACKUP_PATH="/var/lib/awx/projects/switch_backups/kantra/building_A/stack"
+          GIT_USER="your_github_username"
+          GIT_REPO="networksu/su_network_backup"
+
+          log() {
+            echo "$1"
+          }
+
+          log "Changing to backup directory: $BACKUP_PATH"
+          cd $BACKUP_PATH || exit 1
+
+          log "Setting up Git..."
+          git init
+          git config user.name "$GIT_USER"
+          git config user.email "your_email@example.com"
+          git remote add origin git@github.com:$GIT_USER/$GIT_REPO.git
+
+          log "Adding files..."
+          git add -A
+          git commit -m "Automated backup - $(date +%Y%m%d_%H%M%S)"
+
+          log "Pushing to GitHub..."
+          git push -f origin main
+
+          log "Backup and push completed."
+
+      delegate_to: localhost
+      become: yes
 
     - name: Run GitHub push script
       shell: "/var/lib/awx/projects/push_configs.sh"
       delegate_to: localhost
-      run_once: true
+      register: git_result
       become: yes
+
+    - name: Display Git push output
+      debug:
+        var: git_result.stdout_lines
