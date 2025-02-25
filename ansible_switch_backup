@@ -1,0 +1,131 @@
+---
+# Playbook: switch_backup.yml
+# Description: Backup network switch configurations and commit changes to Git repository
+# For use with existing inventory "Cisco_ios_invetory" and group "switch_stack_B_A"
+
+- name: Backup Network Switch Configurations
+  hosts: switch_stack_B_A
+  gather_facts: false
+  vars:
+    # Updated backup path to match the repository structure
+    backup_path: "/var/lib/awx/projects/su_network_backup/kantra/building_A/stack"
+    git_repo: "github.com/networksu/su_network_backup.git"
+    git_branch: "main"
+    git_user: "salwan.mohamed@su.edu.eg"
+    git_email: "salwan.mohamed@su.edu.eg"
+    git_password: "S@1wan9282"
+
+  tasks:
+    - name: Create backup directory if it doesn't exist
+      file:
+        path: "{{ backup_path }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+
+    - name: Get current date and time
+      set_fact:
+        timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Backup Cisco IOS switch configurations
+      ios_config:
+        backup: yes
+        backup_options:
+          filename: "{{ inventory_hostname }}.cfg"
+          dir_path: "{{ backup_path }}"
+      register: backup_results
+
+    # Initialize Git repository if it doesn't exist
+    - name: Check if directory is a Git repository
+      stat:
+        path: "{{ backup_path }}/.git"
+      register: git_dir
+      delegate_to: localhost
+      run_once: true
+
+    - name: Initialize Git repository if not exists
+      shell: |
+        cd {{ backup_path }}
+        git init
+        git config user.name "{{ git_user }}"
+        git config user.email "{{ git_email }}"
+        # Configure credential helper to store credentials temporarily
+        git config credential.helper 'store --file=/tmp/.git-credentials'
+        echo "https://{{ git_user }}:{{ git_password }}@{{ git_repo }}" > /tmp/.git-credentials
+        chmod 600 /tmp/.git-credentials
+        git remote add origin https://github.com/networksu/su_network_backup.git
+        # Create README if the directory is empty
+        if [ ! "$(ls -A | grep -v '^\.git$')" ]; then
+          echo "# Switch Configuration Backups for Building A - Stack" > README.md
+          git add README.md
+          git commit -m "Initial commit"
+        fi
+      delegate_to: localhost
+      run_once: true
+      when: not git_dir.stat.exists
+      no_log: true  # Hide sensitive information from logs
+
+    - name: Check for changes in Git repository
+      shell: |
+        cd {{ backup_path }}
+        git status --porcelain
+      register: git_status
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
+
+    - name: Add changes to Git
+      shell: |
+        cd {{ backup_path }}
+        git add .
+      delegate_to: localhost
+      run_once: true
+      when: git_status.stdout != ""
+
+    - name: Commit changes to Git with timestamp
+      shell: |
+        cd {{ backup_path }}
+        git commit -m "Automated backup of switch configurations - {{ timestamp }}"
+      delegate_to: localhost
+      run_once: true
+      register: git_commit
+      failed_when: git_commit.rc != 0 and "nothing to commit" not in git_commit.stderr
+      changed_when: git_commit.rc == 0
+      when: git_status.stdout != ""
+
+    - name: Set upstream for first push if needed
+      shell: |
+        cd {{ backup_path }}
+        # Ensure credentials are available for push
+        git config credential.helper 'store --file=/tmp/.git-credentials'
+        echo "https://{{ git_user }}:{{ git_password }}@{{ git_repo }}" > /tmp/.git-credentials
+        chmod 600 /tmp/.git-credentials
+        # Make sure we're pushing to the right subdirectory in the repository
+        git push --set-upstream origin {{ git_branch }}
+        # Clean up credentials after use
+        rm -f /tmp/.git-credentials
+      delegate_to: localhost
+      run_once: true
+      register: git_push
+      failed_when: false
+      changed_when: git_push.rc == 0
+      when: not git_dir.stat.exists and git_commit.changed
+      no_log: true  # Hide sensitive information from logs
+
+    - name: Push changes to Git repository
+      shell: |
+        cd {{ backup_path }}
+        # Ensure credentials are available for push
+        git config credential.helper 'store --file=/tmp/.git-credentials'
+        echo "https://{{ git_user }}:{{ git_password }}@{{ git_repo }}" > /tmp/.git-credentials
+        chmod 600 /tmp/.git-credentials
+        git push origin {{ git_branch }}
+        # Clean up credentials after use
+        rm -f /tmp/.git-credentials
+      delegate_to: localhost
+      run_once: true
+      when: git_dir.stat.exists and git_status.stdout != ""
+      no_log: true  # Hide sensitive information from logs
