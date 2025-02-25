@@ -67,8 +67,147 @@
         var: host_dir_contents.stdout_lines
       run_once: true
 
+    # Instead of trying to run the script directly, we'll create it and then run it
+    - name: Create GitHub push script
+      copy:
+        dest: "/var/lib/awx/projects/push_configs.sh"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # GitHub push script - created by Ansible
+
+          # Configuration
+          BACKUP_PATH="/var/lib/awx/projects/switch_backups"
+          GIT_USER="salwan.mohamed"
+          GIT_EMAIL="salwan.mohamed@su.edu.eg"
+          # Your GitHub Personal Access Token
+          GIT_TOKEN="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"
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+          # Create a log file
+          LOG_FILE="/var/lib/awx/projects/github_push_${TIMESTAMP}.log"
+          exec > >(tee -a "$LOG_FILE") 2>&1
+
+          echo "==== Starting GitHub push script at $(date) ===="
+          echo "Using backup path: $BACKUP_PATH"
+
+          cd $BACKUP_PATH || { echo "ERROR: Failed to change to directory $BACKUP_PATH"; exit 1; }
+
+          echo "Current directory: $(pwd)"
+          echo "Directory contents before Git operations:"
+          ls -la
+
+          # Check if any switch configuration files exist
+          echo "Looking for switch configuration files:"
+          find . -name "*.cfg" | sort
+
+          # Check if there's a Git repository already
+          if [ -d ".git" ]; then
+              echo "Existing Git repository found - removing to start fresh"
+              rm -rf .git
+          fi
+
+          # Initialize a new Git repository
+          echo "Initializing new Git repository..."
+          git init
+          if [ $? -ne 0 ]; then
+              echo "ERROR: Failed to initialize Git repository"
+              exit 1
+          fi
+
+          # Configure Git
+          echo "Configuring Git user information..."
+          git config user.name "$GIT_USER"
+          git config user.email "$GIT_EMAIL"
+
+          # Add remote with token authentication
+          echo "Adding remote origin..."
+          git remote add origin "https://$GIT_USER:$GIT_TOKEN@github.com/networksu/su_network_backup.git"
+          if [ $? -ne 0 ]; then
+              echo "ERROR: Failed to add remote origin"
+              exit 1
+          fi
+
+          # Create README file if it doesn't exist
+          if [ ! -f "README.md" ]; then
+              echo "Creating README.md file..."
+              echo "# Switch Configuration Backups" > README.md
+              echo "" >> README.md
+              echo "Last updated: $(date)" >> README.md
+              echo "" >> README.md
+              echo "This repository contains automated backups of network switch configurations." >> README.md
+              echo "" >> README.md
+              echo "## Switches included:" >> README.md
+              echo "" >> README.md
+              for cfg in $(find . -name "*.cfg" | sort); do
+                  basename=$(basename "$cfg" .cfg)
+                  echo "- $basename" >> README.md
+              done
+          else
+              echo "Updating timestamp in README.md..."
+              sed -i "s/Last updated: .*/Last updated: $(date)/" README.md
+              
+              # Update list of switches
+              echo "Updating list of switches in README.md..."
+              sed -i '/^## Switches included:/,$d' README.md
+              echo "" >> README.md
+              echo "## Switches included:" >> README.md
+              echo "" >> README.md
+              for cfg in $(find . -name "*.cfg" | sort); do
+                  basename=$(basename "$cfg" .cfg)
+                  echo "- $basename" >> README.md
+              done
+          fi
+
+          # Stage all files
+          echo "Adding files to Git..."
+          git add -A
+          if [ $? -ne 0 ]; then
+              echo "ERROR: Failed to add files to Git"
+              exit 1
+          fi
+
+          # Get status and show what will be committed
+          echo "Git status:"
+          git status
+
+          # Show what's in the directory (to verify switch configs are there)
+          echo "Files in backup directory that will be committed:"
+          ls -la
+
+          # Commit changes
+          echo "Committing changes..."
+          git commit -m "Automated backup of switch configurations - $TIMESTAMP"
+          COMMIT_STATUS=$?
+          if [ $COMMIT_STATUS -ne 0 ]; then
+              if git status | grep -q "nothing to commit"; then
+                  echo "No changes to commit. Everything up to date."
+              else
+                  echo "ERROR: Git commit failed with status $COMMIT_STATUS"
+                  exit 1
+              fi
+          fi
+
+          # Force push to GitHub to override any conflicts
+          echo "Force pushing to GitHub..."
+          git push -f origin master
+          if [ $? -ne 0 ]; then
+              echo "ERROR: Failed to push to GitHub"
+              exit 1
+          fi
+          echo "Successfully pushed to GitHub!"
+
+          echo "Git operations completed. Final directory contents:"
+          ls -la
+
+          echo "Script completed successfully at $(date)"
+          echo "Log file: $LOG_FILE"
+      delegate_to: localhost
+      run_once: true
+      become: yes
+
     - name: Run GitHub push script
-      shell: /var/lib/awx/projects/push_configs.sh
+      shell: "/var/lib/awx/projects/push_configs.sh"
       delegate_to: localhost
       run_once: true
       become: yes
