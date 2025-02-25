@@ -1,27 +1,32 @@
 ---
 # Playbook: switch_backup.yml
-# Description: Automates switch configuration backups, moves files to a persistent location, and pushes to GitHub.
+# Description: Backs up switch configurations and pushes them to GitHub
+# Runs in Ansible AWX installed on Minikube.
 
-- name: Backup Network Switch Configurations
+- name: Backup Network Switch Configurations and Push to GitHub
   hosts: switch_stack_B_A
   gather_facts: false
   vars:
+    # Temporary directory to store backups inside the Ansible AWX container
     temp_backup_path: "/tmp/switch_backups"
+    # Persistent directory to store backups on the Ubuntu host
     host_backup_path: "/var/lib/awx/projects/switch_backups/kantra/building_A/stack"
 
   tasks:
-    - name: Ensure temporary backup directory exists
+    - name: Ensure temporary backup directory exists in AWX container
       file:
         path: "{{ temp_backup_path }}"
         state: directory
         mode: '0755'
+      delegate_to: localhost
+      run_once: true
       become: yes
 
-    - name: Ensure persistent host backup directory exists
+    - name: Ensure persistent backup directory exists on the host
       file:
         path: "{{ host_backup_path }}"
         state: directory
-        mode: '0777'  # Full access to avoid permission issues
+        mode: '0777'  # Ensure write access
       delegate_to: localhost
       run_once: true
       become: yes
@@ -39,67 +44,120 @@
         msg: "Backup saved to: {{ backup_results.backup_path }}"
       when: backup_results is defined
 
-    - name: Copy backup files to persistent storage
-      shell: |
-        cp -r {{ temp_backup_path }}/* {{ host_backup_path }}/
-        chmod -R 777 {{ host_backup_path }}
+    - name: Copy backup files to persistent directory
+      shell: "cp -v {{ temp_backup_path }}/*.cfg {{ host_backup_path }}/"
       delegate_to: localhost
       become: yes
 
-    - name: Verify copied files in persistent directory
+    - name: Ensure backup files have correct permissions
+      file:
+        path: "{{ host_backup_path }}"
+        mode: '0777'
+        recurse: yes
+      delegate_to: localhost
+      become: yes
+
+    - name: Verify files in the persistent backup directory
       shell: "ls -la {{ host_backup_path }}"
       delegate_to: localhost
-      register: dir_contents
+      register: host_dir_contents
       become: yes
 
-    - name: Display host backup directory contents
+    - name: Display persistent directory contents
       debug:
-        var: dir_contents.stdout_lines
+        var: host_dir_contents.stdout_lines
+      run_once: true
 
-    # Git operations
-    - name: Ensure GitHub push script exists
+    - name: Create GitHub push script
       copy:
         dest: "/var/lib/awx/projects/push_configs.sh"
         mode: '0755'
         content: |
           #!/bin/bash
-          # GitHub push script
-
+          # GitHub push script for switch backups
+          
           BACKUP_PATH="/var/lib/awx/projects/switch_backups/kantra/building_A/stack"
-          GIT_USER="your_github_username"
-          GIT_REPO="networksu/su_network_backup"
+          GIT_USER="salwan.mohamed"
+          GIT_EMAIL="salwan.mohamed@su.edu.eg"
+          GIT_TOKEN="YOUR_GITHUB_TOKEN"
+
+          LOG_FILE="/var/lib/awx/projects/github_push.log"
+
+          echo "==== Starting GitHub push at $(date) ====" > $LOG_FILE
 
           log() {
-            echo "$1"
+            echo "$1" | tee -a $LOG_FILE
           }
 
-          log "Changing to backup directory: $BACKUP_PATH"
-          cd $BACKUP_PATH || exit 1
+          error_exit() {
+            log "ERROR: $1"
+            log "Script failed at $(date)"
+            exit 1
+          }
 
-          log "Setting up Git..."
-          git init
-          git config user.name "$GIT_USER"
-          git config user.email "your_email@example.com"
-          git remote add origin git@github.com:$GIT_USER/$GIT_REPO.git
+          log "Using backup path: $BACKUP_PATH"
 
-          log "Adding files..."
-          git add -A
-          git commit -m "Automated backup - $(date +%Y%m%d_%H%M%S)"
+          [ -d "$BACKUP_PATH" ] || error_exit "Backup directory doesn't exist"
+          cd $BACKUP_PATH || error_exit "Failed to change directory"
+
+          log "Current directory: $(pwd)"
+          log "Directory contents:"
+          ls -la | tee -a $LOG_FILE
+
+          [ -d ".git" ] && { log "Removing existing Git repo"; rm -rf .git; }
+
+          log "Initializing Git repository..."
+          git init >> $LOG_FILE 2>&1 || error_exit "Failed to initialize Git"
+
+          log "Configuring Git..."
+          git config user.name "$GIT_USER" >> $LOG_FILE 2>&1 || error_exit "Failed to set Git user"
+          git config user.email "$GIT_EMAIL" >> $LOG_FILE 2>&1 || error_exit "Failed to set Git email"
+
+          log "Adding remote repository..."
+          git remote add origin "https://$GIT_USER:$GIT_TOKEN@github.com/networksu/su_network_backup.git" >> $LOG_FILE 2>&1 || error_exit "Failed to add remote"
+
+          log "Creating README file..."
+          echo "# Switch Configuration Backups" > README.md
+          echo "" >> README.md
+          echo "Last updated: $(date)" >> README.md
+          echo "" >> README.md
+          echo "## Switches included:" >> README.md
+          echo "" >> README.md
+          for cfg in $(find . -name "*.cfg" | sort); do
+            basename=$(basename "$cfg" .cfg)
+            echo "- $basename" >> README.md
+          done
+
+          log "Adding files to Git..."
+          git add -A >> $LOG_FILE 2>&1 || error_exit "Failed to add files to Git"
+
+          log "Committing changes..."
+          git commit -m "Switch backups - $(date +%Y%m%d_%H%M%S)" >> $LOG_FILE 2>&1 || echo "Nothing to commit"
 
           log "Pushing to GitHub..."
-          git push -f origin main
+          git push -f origin main >> $LOG_FILE 2>&1 || error_exit "Failed to push to GitHub"
 
-          log "Backup and push completed."
-
+          log "GitHub push completed successfully."
+          exit 0
       delegate_to: localhost
+      run_once: true
       become: yes
 
     - name: Run GitHub push script
       shell: "/var/lib/awx/projects/push_configs.sh"
       delegate_to: localhost
-      register: git_result
+      register: git_push_result
       become: yes
+      ignore_errors: yes
 
-    - name: Display Git push output
+    - name: Show Git push log if available
+      shell: "cat /var/lib/awx/projects/github_push.log || echo 'Log file not found'"
+      delegate_to: localhost
+      register: git_log
+      become: yes
+      ignore_errors: yes
+
+    - name: Display Git push log
       debug:
-        var: git_result.stdout_lines
+        var: git_log.stdout_lines
+      run_once: true
