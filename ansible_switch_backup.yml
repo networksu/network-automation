@@ -1,6 +1,6 @@
 ---
-# Playbook: switch_backup.yml
-# Description: Backup network switch configurations - uses external script for Git operations
+# Playbook: switch_backup_with_post.yml 
+# This playbook backs up switches and then runs a post-job command to push to GitHub
 
 - name: Backup Network Switch Configurations
   hosts: switch_stack_B_A
@@ -16,6 +16,7 @@
         mode: '0755'
       delegate_to: localhost
       run_once: true
+      become: yes
 
     - name: Backup Cisco IOS switch configurations
       ios_config:
@@ -25,7 +26,5 @@
           dir_path: "{{ backup_path }}"
       register: backup_results
 
-    - name: Run external Git push script
-      shell: /var/lib/awx/projects/push_configs.sh
-      delegate_to: localhost
-      run_once: true
+# No Git operations in the main playbook
+# Instead, create a post-job command in AWX job template
