@@ -1,11 +1,13 @@
 ---
+# Playbook: switch_backup.yml
+# Description: Backs up switch configurations and saves to host path
+
 - name: Backup Network Switch Configurations
   hosts: switch_stack_B_A
   gather_facts: false
   vars:
     temp_backup_path: "/tmp/switch_backups"
-    host_backup_path: "/var/lib/awx/projects/switch_backups"
-    github_repo: "https://github.com/networksu/su_network_backup.git"
+    host_backup_path: "/var/lib/awx/projects/switch_backups/kantra/building_A/stack"
 
   tasks:
     - name: Ensure temporary backup directory exists
@@ -34,77 +36,35 @@
           dir_path: "{{ temp_backup_path }}"
       register: backup_results
 
-    - name: Copy backup files to persistent storage
+    - name: Display backup path
+      debug:
+        msg: "Backup saved to: {{ backup_results.backup_path }}"
+      when: backup_results is defined
+
+    - name: Ensure backup files are copied to persistent directory
       copy:
         src: "{{ temp_backup_path }}/{{ inventory_hostname }}.cfg"
-        dest: "{{ host_backup_path }}/kantra/building_A/stack/{{ inventory_hostname }}.cfg"
+        dest: "{{ host_backup_path }}/{{ inventory_hostname }}.cfg"
         mode: '0644'
         remote_src: yes
       delegate_to: localhost
       become: yes
       when: backup_results is defined and backup_results.backup_path is defined
 
-    - name: Verify backup files exist in persistent storage
-      stat:
-        path: "{{ host_backup_path }}/kantra/building_A/stack/{{ inventory_hostname }}.cfg"
-      delegate_to: localhost
-      register: file_status
-      become: yes
-
-    - name: Fail if no backup files were found
-      fail:
-        msg: "Backup file missing: {{ inventory_hostname }}.cfg"
-      when: not file_status.stat.exists
-
-    - name: Create GitHub push script
-      copy:
-        dest: "/var/lib/awx/projects/push_configs.sh"
-        mode: '0755'
-        content: |
-          #!/bin/bash
-          set -e
-          BACKUP_PATH="/var/lib/awx/projects/switch_backups/kantra/building_A/stack"
-          GIT_USER="salwan.mohamed"
-          GIT_EMAIL="salwan.mohamed@su.edu.eg"
-          GIT_TOKEN="YOUR_GITHUB_TOKEN"
-          GIT_REPO="https://github.com/networksu/su_network_backup.git"
-          LOG_FILE="/var/lib/awx/projects/github_push.log"
-
-          echo "==== Starting GitHub push script ====" > $LOG_FILE
-          
-          cd $BACKUP_PATH || { echo "Directory does not exist"; exit 1; }
-
-          [ -d ".git" ] || git init
-
-          git config user.name "$GIT_USER"
-          git config user.email "$GIT_EMAIL"
-          git remote add origin $GIT_REPO || true
-          
-          git add -A
-          git commit -m "Automated switch backup - $(date +%Y%m%d_%H%M%S)"
-          git pull --rebase origin main || true
-          git push -f origin main
-          
-          echo "==== GitHub push completed ===="
-
+    - name: List files in host backup directory
+      shell: "ls -la {{ host_backup_path }}"
       delegate_to: localhost
       run_once: true
+      register: host_dir_contents
       become: yes
+
+    - name: Show host directory contents
+      debug:
+        var: host_dir_contents.stdout_lines
+      run_once: true
 
     - name: Run GitHub push script
       shell: "/var/lib/awx/projects/push_configs.sh"
       delegate_to: localhost
       run_once: true
       become: yes
-
-    - name: Display GitHub push log
-      shell: "cat /var/lib/awx/projects/github_push.log || echo 'Log file not found'"
-      delegate_to: localhost
-      register: git_log
-      become: yes
-      ignore_errors: yes
-
-    - name: Show push log output
-      debug:
-        var: git_log.stdout_lines
-      run_once: true
