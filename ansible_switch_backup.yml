@@ -1,5 +1,5 @@
 ---
-# Playbook: switch_backup.yml 
+# Playbook: switch_backup.yml
 # Description: Backs up switch configurations and commits to GitHub
 # For use with existing inventory "Cisco_ios_invetory" and group "switch_stack_B_A"
 
@@ -8,17 +8,19 @@
   gather_facts: false
   vars:
     backup_path: "/var/lib/awx/projects/switch_backups"
-  
+
   tasks:
     - name: Create backup directory if it doesn't exist
       file:
         path: "{{ backup_path }}"
         state: directory
         mode: '0755'
+        owner: awx
+        group: awx
       delegate_to: localhost
       run_once: true
       become: yes
-    
+
     - name: Backup Cisco IOS switch configurations
       ios_config:
         backup: yes
@@ -26,12 +28,24 @@
           filename: "{{ inventory_hostname }}.cfg"
           dir_path: "{{ backup_path }}"
       register: backup_results
-    
+
     - name: Display backup path
       debug:
         msg: "Backup saved to: {{ backup_results.backup_path }}"
       when: backup_results is defined
-    
+
+    - name: List files in backup directory
+      shell: "ls -la {{ backup_path }}"
+      delegate_to: localhost
+      run_once: true
+      register: dir_contents
+      become: yes
+
+    - name: Show directory contents
+      debug:
+        var: dir_contents.stdout_lines
+      run_once: true
+
     - name: Run GitHub push script
       shell: /var/lib/awx/projects/push_configs.sh
       delegate_to: localhost
