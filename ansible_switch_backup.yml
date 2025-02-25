@@ -1,102 +1,171 @@
-- name: Create GitHub push script with enhanced logging
-  copy:
-    dest: "/var/lib/awx/projects/push_configs.sh"
-    mode: '0755'
-    content: |
-      #!/bin/bash
-      # GitHub push script with enhanced error logging
-      
-      # Configuration
-      BACKUP_PATH="/var/lib/awx/projects/switch_backups"
-      GIT_USER="salwan.mohamed"
-      GIT_EMAIL="salwan.mohamed@su.edu.eg"
-      GIT_TOKEN="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"
-      
-      # Fixed log file location that won't get truncated in output
-      LOG_FILE="/var/lib/awx/projects/github_push.log"
-      
-      # Start logging
-      echo "==== Starting GitHub push script at $(date) ====" > $LOG_FILE
-      
-      # Function to log messages
-      log() {
-        echo "$1" | tee -a $LOG_FILE
-      }
-      
-      # Function to log error and exit
-      error_exit() {
-        log "ERROR: $1"
-        log "Script failed at $(date)"
-        exit 1
-      }
-      
-      log "Using backup path: $BACKUP_PATH"
-      
-      # Check directory exists
-      [ -d "$BACKUP_PATH" ] || error_exit "Backup directory doesn't exist"
-      cd $BACKUP_PATH || error_exit "Failed to change to directory $BACKUP_PATH"
-      
-      log "Current directory: $(pwd)"
-      log "Directory contents:"
-      ls -la | tee -a $LOG_FILE
-      
-      # Git operations with error checking
-      [ -d ".git" ] && { log "Removing existing Git repo"; rm -rf .git; }
-      
-      log "Initializing Git repository..."
-      git init >> $LOG_FILE 2>&1 || error_exit "Failed to initialize Git"
-      
-      log "Configuring Git..."
-      git config user.name "$GIT_USER" >> $LOG_FILE 2>&1 || error_exit "Failed to set Git user"
-      git config user.email "$GIT_EMAIL" >> $LOG_FILE 2>&1 || error_exit "Failed to set Git email"
-      
-      log "Setting up remote..."
-      git remote add origin "https://$GIT_USER:$GIT_TOKEN@github.com/networksu/su_network_backup.git" >> $LOG_FILE 2>&1 || error_exit "Failed to add remote"
-      
-      # Create README
-      log "Creating README file..."
-      echo "# Switch Configuration Backups" > README.md
-      echo "" >> README.md
-      echo "Last updated: $(date)" >> README.md
-      echo "" >> README.md
-      echo "## Switches included:" >> README.md
-      echo "" >> README.md
-      for cfg in $(find . -name "*.cfg" | sort); do
-        basename=$(basename "$cfg" .cfg)
-        echo "- $basename" >> README.md
-      done
-      
-      log "Adding files to Git..."
-      git add -A >> $LOG_FILE 2>&1 || error_exit "Failed to add files to Git"
-      
-      log "Committing changes..."
-      git commit -m "Switch configurations - $(date +%Y%m%d_%H%M%S)" >> $LOG_FILE 2>&1
-      # Ignore commit errors due to "nothing to commit"
-      
-      log "Pushing to GitHub..."
-      git push -f origin master >> $LOG_FILE 2>&1 || error_exit "Failed to push to GitHub"
-      
-      log "Successfully completed at $(date)"
-      exit 0
-  delegate_to: localhost
-  run_once: true
-  become: yes
+---
+# Playbook: switch_backup.yml
+# Description: Backs up switch configurations and saves to host path
+# For use with existing inventory "Cisco_ios_invetory" and group "switch_stack_B_A"
 
-- name: Run GitHub push script
-  shell: "/var/lib/awx/projects/push_configs.sh"
-  delegate_to: localhost
-  run_once: true
-  become: yes
+- name: Backup Network Switch Configurations
+  hosts: switch_stack_B_A
+  gather_facts: false
+  vars:
+    # Temporary backup path inside container
+    temp_backup_path: "/tmp/switch_backups"
+    # Final destination path (container-accessible)
+    host_backup_path: "/var/lib/awx/projects/switch_backups"
 
-- name: Show push script log if exists
-  shell: "cat /var/lib/awx/projects/github_push.log || echo 'Log file not found'"
-  delegate_to: localhost
-  run_once: true
-  register: git_log
-  become: yes
-  ignore_errors: yes
+  tasks:
+    - name: Create temporary backup directory if it doesn't exist
+      file:
+        path: "{{ temp_backup_path }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+      become: yes
 
-- name: Display git push log
-  debug:
-    var: git_log.stdout_lines
-  run_once: true
+    - name: Create host backup directory if it doesn't exist
+      file:
+        path: "{{ host_backup_path }}"
+        state: directory
+        mode: '0777'  # World-writable to avoid permission issues
+      delegate_to: localhost
+      run_once: true
+      become: yes
+
+    - name: Backup Cisco IOS switch configurations
+      ios_config:
+        backup: yes
+        backup_options:
+          filename: "{{ inventory_hostname }}.cfg"
+          dir_path: "{{ temp_backup_path }}"
+      register: backup_results
+
+    - name: Display backup path
+      debug:
+        msg: "Backup saved to: {{ backup_results.backup_path }}"
+      when: backup_results is defined
+
+    # Copy the backup files from the temporary location to the host location
+    - name: Copy backup files to host directory
+      copy:
+        src: "{{ temp_backup_path }}/{{ inventory_hostname }}.cfg"
+        dest: "{{ host_backup_path }}/{{ inventory_hostname }}.cfg"
+        mode: '0644'
+        remote_src: yes
+      delegate_to: localhost
+      become: yes
+      when: backup_results is defined and backup_results.backup_path is defined
+
+    - name: List files in host backup directory
+      shell: "ls -la {{ host_backup_path }}"
+      delegate_to: localhost
+      run_once: true
+      register: host_dir_contents
+      become: yes
+
+    - name: Show host directory contents
+      debug:
+        var: host_dir_contents.stdout_lines
+      run_once: true
+
+    - name: Create GitHub push script with enhanced logging
+      copy:
+        dest: "/var/lib/awx/projects/push_configs.sh"
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # GitHub push script with enhanced error logging
+          
+          # Configuration
+          BACKUP_PATH="/var/lib/awx/projects/switch_backups"
+          GIT_USER="salwan.mohamed"
+          GIT_EMAIL="salwan.mohamed@su.edu.eg"
+          GIT_TOKEN="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"
+          
+          # Fixed log file location that won't get truncated in output
+          LOG_FILE="/var/lib/awx/projects/github_push.log"
+          
+          # Start logging
+          echo "==== Starting GitHub push script at $(date) ====" > $LOG_FILE
+          
+          # Function to log messages
+          log() {
+            echo "$1" | tee -a $LOG_FILE
+          }
+          
+          # Function to log error and exit
+          error_exit() {
+            log "ERROR: $1"
+            log "Script failed at $(date)"
+            exit 1
+          }
+          
+          log "Using backup path: $BACKUP_PATH"
+          
+          # Check directory exists
+          [ -d "$BACKUP_PATH" ] || error_exit "Backup directory doesn't exist"
+          cd $BACKUP_PATH || error_exit "Failed to change to directory $BACKUP_PATH"
+          
+          log "Current directory: $(pwd)"
+          log "Directory contents:"
+          ls -la | tee -a $LOG_FILE
+          
+          # Git operations with error checking
+          [ -d ".git" ] && { log "Removing existing Git repo"; rm -rf .git; }
+          
+          log "Initializing Git repository..."
+          git init >> $LOG_FILE 2>&1 || error_exit "Failed to initialize Git"
+          
+          log "Configuring Git..."
+          git config user.name "$GIT_USER" >> $LOG_FILE 2>&1 || error_exit "Failed to set Git user"
+          git config user.email "$GIT_EMAIL" >> $LOG_FILE 2>&1 || error_exit "Failed to set Git email"
+          
+          log "Setting up remote..."
+          git remote add origin "https://$GIT_USER:$GIT_TOKEN@github.com/networksu/su_network_backup.git" >> $LOG_FILE 2>&1 || error_exit "Failed to add remote"
+          
+          # Create README
+          log "Creating README file..."
+          echo "# Switch Configuration Backups" > README.md
+          echo "" >> README.md
+          echo "Last updated: $(date)" >> README.md
+          echo "" >> README.md
+          echo "## Switches included:" >> README.md
+          echo "" >> README.md
+          for cfg in $(find . -name "*.cfg" | sort); do
+            basename=$(basename "$cfg" .cfg)
+            echo "- $basename" >> README.md
+          done
+          
+          log "Adding files to Git..."
+          git add -A >> $LOG_FILE 2>&1 || error_exit "Failed to add files to Git"
+          
+          log "Committing changes..."
+          git commit -m "Switch configurations - $(date +%Y%m%d_%H%M%S)" >> $LOG_FILE 2>&1
+          # Ignore commit errors due to "nothing to commit"
+          
+          log "Pushing to GitHub..."
+          git push -f origin master >> $LOG_FILE 2>&1 || error_exit "Failed to push to GitHub"
+          
+          log "Successfully completed at $(date)"
+          exit 0
+      delegate_to: localhost
+      run_once: true
+      become: yes
+
+    - name: Run GitHub push script
+      shell: "/var/lib/awx/projects/push_configs.sh"
+      delegate_to: localhost
+      run_once: true
+      become: yes
+
+    - name: Show push script log if exists
+      shell: "cat /var/lib/awx/projects/github_push.log || echo 'Log file not found'"
+      delegate_to: localhost
+      run_once: true
+      register: git_log
+      become: yes
+      ignore_errors: yes
+
+    - name: Display git push log
+      debug:
+        var: git_log.stdout_lines
+      run_once: true
