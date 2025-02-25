@@ -9,6 +9,8 @@
   vars:
     # Temporary backup path inside container (will be lost after container restart)
     temp_backup_path: "/tmp/switch_backups"
+    # Path within repository where configs should be stored
+    repo_subpath: "kantra/building_A/stack"
 
   tasks:
     - name: Create temporary backup directory
@@ -28,20 +30,28 @@
           dir_path: "{{ temp_backup_path }}"
       register: backup_results
 
-    - name: Initialize Git repo in temp directory
+    - name: Clone repository to get full history
       shell: |
-        cd {{ temp_backup_path }}
-        git init
-        git config user.name "salwan.mohamed"
-        git config user.email "salwan.mohamed@su.edu.eg"
-        git remote add origin "https://salwan.mohamed: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@github.com/networksu/su_network_backup.git"
+        cd /tmp
+        rm -rf repo_clone
+        git clone https://salwan.mohamed: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@github.com/networksu/su_network_backup.git repo_clone
+        mkdir -p /tmp/repo_clone/{{ repo_subpath }}
       delegate_to: localhost
       run_once: true
       become: yes
+      ignore_errors: yes
+
+    - name: Copy configs to repository structure
+      shell: |
+        cp {{ temp_backup_path }}/*.cfg /tmp/repo_clone/{{ repo_subpath }}/
+      delegate_to: localhost
+      run_once: true
+      become: yes
+      ignore_errors: yes
 
     - name: Create README with list of switches
       shell: |
-        cd {{ temp_backup_path }}
+        cd /tmp/repo_clone/{{ repo_subpath }}
         echo "# Switch Configuration Backups" > README.md
         echo "" >> README.md
         echo "Last updated: $(date)" >> README.md
@@ -55,13 +65,16 @@
       delegate_to: localhost
       run_once: true
       become: yes
+      ignore_errors: yes
 
     - name: Commit and push to GitHub
       shell: |
-        cd {{ temp_backup_path }}
+        cd /tmp/repo_clone
+        git config user.name "salwan.mohamed"
+        git config user.email "salwan.mohamed@su.edu.eg"
         git add -A
         git commit -m "Switch configurations - $(date +%Y%m%d_%H%M%S)"
-        git push -f origin master
+        git push
       delegate_to: localhost
       run_once: true
       become: yes
