@@ -52,10 +52,6 @@
         git init
         git config user.name "{{ git_user }}"
         git config user.email "{{ git_email }}"
-        # Configure credential helper to store credentials temporarily
-        git config credential.helper 'store --file=/tmp/.git-credentials'
-        echo "https://{{ git_user }}:{{ git_password }}@{{ git_repo }}" > /tmp/.git-credentials
-        chmod 600 /tmp/.git-credentials
         git remote add origin https://github.com/networksu/su_network_backup.git
         # Create README if the directory is empty
         if [ ! "$(ls -A | grep -v '^\.git$')" ]; then
@@ -66,7 +62,6 @@
       delegate_to: localhost
       run_once: true
       when: not git_dir.stat.exists
-      no_log: true  # Hide sensitive information from logs
 
     - name: Check for changes in Git repository
       shell: |
@@ -96,36 +91,22 @@
       changed_when: git_commit.rc == 0
       when: git_status.stdout != ""
 
-    - name: Set upstream for first push if needed
+    - name: Push changes to Git repository (first time)
       shell: |
         cd {{ backup_path }}
-        # Ensure credentials are available for push
-        git config credential.helper 'store --file=/tmp/.git-credentials'
-        echo "https://{{ git_user }}:{{ git_password }}@{{ git_repo }}" > /tmp/.git-credentials
-        chmod 600 /tmp/.git-credentials
-        # Make sure we're pushing to the right subdirectory in the repository
+        git remote set-url origin https://{{ git_user }}:{{ git_password | urlencode }}@github.com/networksu/su_network_backup.git
         git push --set-upstream origin {{ git_branch }}
-        # Clean up credentials after use
-        rm -f /tmp/.git-credentials
       delegate_to: localhost
       run_once: true
-      register: git_push
-      failed_when: false
-      changed_when: git_push.rc == 0
       when: not git_dir.stat.exists and git_commit.changed
-      no_log: true  # Hide sensitive information from logs
+      no_log: true
 
-    - name: Push changes to Git repository
+    - name: Push changes to Git repository (subsequent)
       shell: |
         cd {{ backup_path }}
-        # Ensure credentials are available for push
-        git config credential.helper 'store --file=/tmp/.git-credentials'
-        echo "https://{{ git_user }}:{{ git_password }}@{{ git_repo }}" > /tmp/.git-credentials
-        chmod 600 /tmp/.git-credentials
+        git remote set-url origin https://{{ git_user }}:{{ git_password | urlencode }}@github.com/networksu/su_network_backup.git
         git push origin {{ git_branch }}
-        # Clean up credentials after use
-        rm -f /tmp/.git-credentials
       delegate_to: localhost
       run_once: true
       when: git_dir.stat.exists and git_status.stdout != ""
-      no_log: true  # Hide sensitive information from logs
+      no_log: true
