@@ -1,7 +1,6 @@
 ---
 # Playbook: switch_backup.yml
-# Description: Back up switch configurations and push them to GitHub
-# Used with inventory "Cisco_ios_inventory" and group "switch_stack_B_A"
+# Description: Backs up switch configurations and pushes them to GitHub
 
 - name: Backup Network Switch Configurations
   hosts: switch_stack_B_A
@@ -24,7 +23,7 @@
       file:
         path: "{{ host_backup_path }}"
         state: directory
-        mode: '0777'  # Avoid permission issues
+        mode: '0777'
       delegate_to: localhost
       run_once: true
       become: yes
@@ -36,11 +35,6 @@
           filename: "{{ inventory_hostname }}.cfg"
           dir_path: "{{ temp_backup_path }}"
       register: backup_results
-
-    - name: Display backup path
-      debug:
-        msg: "Backup saved to: {{ backup_results.backup_path }}"
-      when: backup_results is defined
 
     - name: Copy backup files to persistent storage
       copy:
@@ -55,64 +49,57 @@
     - name: Verify backup files exist in persistent storage
       stat:
         path: "{{ host_backup_path }}/{{ inventory_hostname }}.cfg"
-      register: file_check
       delegate_to: localhost
-      become: yes
-
-    - name: Show existing backup files
-      debug:
-        msg: "Existing backup files: {{ host_backup_path }}"
-      delegate_to: localhost
+      register: backup_file_status
       become: yes
 
     - name: Fail if no backup files were found
       fail:
         msg: "No backup files found in {{ host_backup_path }}"
-      when: file_check.stat.exists == false
+      when: not backup_file_status.stat.exists
 
-    - name: Ensure GitHub push script is in place
+    - name: Create GitHub push script
       copy:
         dest: "/var/lib/awx/projects/push_configs.sh"
         mode: '0755'
         content: |
           #!/bin/bash
-          set -e
-          
           BACKUP_PATH="/var/lib/awx/projects/switch_backups"
           GIT_USER="salwan.mohamed"
           GIT_EMAIL="salwan.mohamed@su.edu.eg"
-          GIT_TOKEN="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"
           GIT_REPO="networksu/su_network_backup"
+          GIT_BRANCH="main"
           LOG_FILE="/var/lib/awx/projects/github_push.log"
 
           echo "==== Starting GitHub push script ====" > $LOG_FILE
-          
-          cd $BACKUP_PATH || { echo "ERROR: Cannot access $BACKUP_PATH" | tee -a $LOG_FILE; exit 1; }
           echo "Current directory: $(pwd)" >> $LOG_FILE
-          
+
+          cd $BACKUP_PATH || exit 1
+
           if [ ! -d ".git" ]; then
-            echo "Initializing new Git repository" | tee -a $LOG_FILE
+            echo "Initializing new Git repository..." >> $LOG_FILE
             git init
-            git branch -m master main
-            git remote add origin "https://$GIT_USER:$GIT_TOKEN@github.com/$GIT_REPO.git"
+            git config user.name "$GIT_USER"
+            git config user.email "$GIT_EMAIL"
+            git remote add origin "https://$GIT_USER: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@github.com/$GIT_REPO.git"
           fi
 
-          echo "Setting up Git configurations" | tee -a $LOG_FILE
-          git config user.name "$GIT_USER"
-          git config user.email "$GIT_EMAIL"
-
-          echo "Adding backup files to Git" | tee -a $LOG_FILE
+          echo "Adding all backup files to Git..." >> $LOG_FILE
           git add -A
-          git commit -m "Switch configurations - $(date +%Y%m%d_%H%M%S)" || echo "Nothing to commit" >> $LOG_FILE
 
-          echo "Fetching latest updates from GitHub" | tee -a $LOG_FILE
-          git fetch origin main
-          git reset --hard origin/main
+          echo "Committing changes..." >> $LOG_FILE
+          git commit -m "Updated switch backup configurations $(date)" || echo "No changes to commit" >> $LOG_FILE
 
-          echo "Pushing to GitHub..." | tee -a $LOG_FILE
-          git push -u origin main --force || { echo "ERROR: Git push failed" | tee -a $LOG_FILE; exit 1; }
+          echo "Fetching latest from GitHub..." >> $LOG_FILE
+          git fetch origin $GIT_BRANCH
 
-          echo "Backup and push completed successfully" | tee -a $LOG_FILE
+          echo "Merging remote changes..." >> $LOG_FILE
+          git pull origin $GIT_BRANCH --no-edit
+
+          echo "Pushing changes to GitHub..." >> $LOG_FILE
+          git push -u origin $GIT_BRANCH --force || echo "Push failed!" >> $LOG_FILE
+
+          echo "==== GitHub push completed ====" >> $LOG_FILE
       delegate_to: localhost
       run_once: true
       become: yes
@@ -122,8 +109,6 @@
       delegate_to: localhost
       run_once: true
       become: yes
-      register: push_script_result
-      failed_when: "'ERROR' in push_script_result.stdout"
 
     - name: Show push script log if exists
       shell: "cat /var/lib/awx/projects/github_push.log || echo 'Log file not found'"
@@ -133,7 +118,7 @@
       become: yes
       ignore_errors: yes
 
-    - name: Display git push log
+    - name: Display GitHub push log
       debug:
         var: git_log.stdout_lines
       run_once: true
